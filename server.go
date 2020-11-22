@@ -10,6 +10,8 @@ import (
 	"sync"
 )
 
+var pathRegex *regexp.Regexp
+
 type Todo struct {
 	Id    int64  `json:"id"`
 	Title string `json:"title"`
@@ -28,6 +30,21 @@ func (h *todoHandlers) todos(w http.ResponseWriter, r *http.Request) {
 		break
 	case "POST":
 		h.post(w, r)
+		break
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		w.Write([]byte("method not allowed"))
+		return
+	}
+}
+
+func (h *todoHandlers) todo(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		h.getOne(w, r)
+		break
+	case "DELETE":
+		h.delete(w, r)
 		break
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -90,20 +107,14 @@ func (h *todoHandlers) get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *todoHandlers) getOne(w http.ResponseWriter, r *http.Request) {
-	regex, err := regexp.Compile("^/?todo/([\\d]+)/?$")
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("Bad stuff happened"))
-		return
-	}
 
-	if !regex.MatchString(r.URL.Path) {
+	if !pathRegex.MatchString(r.URL.Path) {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte("Invalid path, should be /todo/{id}"))
 		return
 	}
 
-	idParam := regex.FindStringSubmatch(r.URL.Path)[1]
+	idParam := pathRegex.FindStringSubmatch(r.URL.Path)[1]
 	id, err := strconv.ParseInt(idParam, 10, 64)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -131,6 +142,36 @@ func (h *todoHandlers) getOne(w http.ResponseWriter, r *http.Request) {
 	w.Write(jsonBytes)
 }
 
+func (h *todoHandlers) delete(w http.ResponseWriter, r *http.Request) {
+
+	if !pathRegex.MatchString(r.URL.Path) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("Invalid path, should be /todo/{id}"))
+		return
+	}
+
+	idParam := pathRegex.FindStringSubmatch(r.URL.Path)[1]
+	id, err := strconv.ParseInt(idParam, 10, 64)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("Bad stuff happened"))
+		return
+	}
+
+	h.mu.Lock()
+	_, found := h.store[id]
+	if !found {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(fmt.Sprintf("Todo with %v does not exist", id)))
+		return
+	}
+	h.mu.Unlock()
+
+	delete(h.store, id)
+	w.Header().Add("content-type", "application/json")
+	w.WriteHeader(http.StatusOK)
+}
+
 func newTodoHandlers() *todoHandlers {
 	// using pointer since it will be data storage
 	return &todoHandlers{
@@ -149,10 +190,23 @@ func newTodoHandlers() *todoHandlers {
 	}
 }
 
+func init() {
+	var err error
+	pathRegex, err = regexp.Compile("^/?todo/([\\d]+)/?$")
+	if err != nil {
+		panic(err.Error())
+	}
+}
+
+// What does this means, anyway?
+
+// In simple terms, value receiver makes a copy of the type and pass it to the function. The function stack now holds an equal object but at a different location on memory.
+
+// Pointer receiver passes the address of a type to the function. The function stack has a reference to the original object.
 func main() {
 	todoHandlers := newTodoHandlers()
 	http.HandleFunc("/todo", todoHandlers.todos)
-	http.HandleFunc("/todo/", todoHandlers.getOne)
+	http.HandleFunc("/todo/", todoHandlers.todo)
 
 	err := http.ListenAndServe(":8080", nil)
 	if err != nil {
